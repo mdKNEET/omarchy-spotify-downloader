@@ -53,12 +53,6 @@ BarWidget {
   function open() { popupOpen = true }
   function close() { popupOpen = false }
 
-  // A HyprlandFocusGrab gives the popup's surface Wayland keyboard focus, but
-  // Qt still needs an item to hold *active* focus before Ctrl+V reaches it —
-  // otherwise only a click (which focuses on press) can paste. Mirrors
-  // wifiqr's Qt.callLater(...forceActiveFocus()) on open.
-  onPopupOpenChanged: if (popupOpen) Qt.callLater(function() { urlField.forceActiveFocus() })
-
   function checkSpotdl() {
     spotdlChecked = false
     checkProc.running = false
@@ -256,12 +250,21 @@ BarWidget {
     }
   }
 
-  PopupCard {
+  // KeyboardPanel (not PopupCard): PopupCard's xdg-popup window relies on
+  // HyprlandFocusGrab for click/dismiss routing only and never actually
+  // takes Wayland keyboard focus, so a TextField inside one shows a caret
+  // but never receives real key events — Ctrl+V silently went nowhere.
+  // KeyboardPanel is Omarchy's own answer to that (see its header comment;
+  // the network panel's wifi-password field relies on the same component
+  // for exactly this reason): a PanelWindow that primes
+  // WlrKeyboardFocus.Exclusive on open and drives `focusTarget` itself.
+  KeyboardPanel {
     id: popup
     anchorItem: root
     bar: root.bar
     owner: root
     open: root.popupOpen
+    focusTarget: urlField
     contentWidth: popup.fittedContentWidth(Style.space(360))
     contentHeight: popup.fittedContentHeight(column.implicitHeight, Style.space(520))
 
