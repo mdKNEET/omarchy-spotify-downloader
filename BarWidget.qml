@@ -48,6 +48,11 @@ BarWidget {
   }
   readonly property var displayedJobs: jobs.length > 8 ? jobs.slice(jobs.length - 8) : jobs
 
+  // open()/close()/opened let Bar.findPanelWidget route shell.summon/hide/toggle
+  // (and therefore a user keybind) to this widget's popup, the same contract
+  // the built-in weather/audio/network widgets use.
+  readonly property bool opened: popupOpen
+  function open() { popupOpen = true }
   function close() { popupOpen = false }
 
   function checkSpotdl() {
