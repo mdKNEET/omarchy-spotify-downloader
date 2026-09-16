@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.mdkneet.spotify-downloader",
+  "name": "Spotify Downloader",
+  "version": "1.0.0",
+  "author": "mdKNEET",
+  "license": "MIT",
+  "description": "Paste a Spotify link into the Omarchy bar and download it as a local audio file via spotDL, with a queue for multiple simultaneous downloads.",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "BarWidget.qml" },
+  "barWidget": {
+    "displayName": "Spotify Downloader",
+    "description": "Download Spotify tracks, albums, and playlists with spotDL. Queue several downloads at once and pick the destination folder.",
+    "category": "Media",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "downloadDir": "~/Music/Spotify",
+      "maxConcurrent": 3,
+      "audioFormat": "mp3"
+    },
+    "schema": [
+      {
+        "key": "downloadDir",
+        "type": "path",
+        "label": "Download folder",
+        "defaultValue": "~/Music/Spotify",
+        "description": "Where downloaded tracks are saved."
+      },
+      {
+        "key": "maxConcurrent",
+        "type": "integer",
+        "label": "Max simultaneous downloads",
+        "min": 1,
+        "max": 6,
+        "step": 1,
+        "defaultValue": 3
+      },
+      {
+        "key": "audioFormat",
+        "type": "enum",
+        "label": "Audio format",
+        "options": ["mp3", "flac", "opus", "m4a", "wav", "ogg"],
+        "defaultValue": "mp3"
+      }
+    ]
+  }
+}
