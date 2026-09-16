@@ -46,14 +46,18 @@ BarWidget {
     for (var i = 0; i < jobs.length; i++) if (jobs[i].status === "queued") n++
     return n
   }
-  readonly property var displayedJobs: jobs.length > 8 ? jobs.slice(jobs.length - 8) : jobs
-
   // open()/close()/opened let Bar.findPanelWidget route shell.summon/hide/toggle
   // (and therefore a user keybind) to this widget's popup, the same contract
   // the built-in weather/audio/network widgets use.
   readonly property bool opened: popupOpen
   function open() { popupOpen = true }
   function close() { popupOpen = false }
+
+  // A HyprlandFocusGrab gives the popup's surface Wayland keyboard focus, but
+  // Qt still needs an item to hold *active* focus before Ctrl+V reaches it —
+  // otherwise only a click (which focuses on press) can paste. Mirrors
+  // wifiqr's Qt.callLater(...forceActiveFocus()) on open.
+  onPopupOpenChanged: if (popupOpen) Qt.callLater(function() { urlField.forceActiveFocus() })
 
   function checkSpotdl() {
     spotdlChecked = false
@@ -76,7 +80,7 @@ BarWidget {
   }
 
   function pruneJobs() {
-    var MAX = 30
+    var MAX = 10
     if (root.jobs.length <= MAX) return
     var arr = root.jobs.slice()
     var i = 0
@@ -112,9 +116,11 @@ BarWidget {
       url: url,
       title: Model.shortLabel(url),
       status: "queued",
-      message: "In wachtrij"
+      message: "In wachtrij",
+      progress: 0
     }
     root.jobs = root.jobs.concat([job])
+    root.pruneJobs()
     root.pump()
   }
 
@@ -131,10 +137,12 @@ BarWidget {
   }
 
   function finishJob(id, success, lastLine) {
-    updateJob(id, {
+    var patch = {
       status: success ? "done" : "error",
       message: success ? "Klaar" : (lastLine || "Download mislukt")
-    })
+    }
+    if (success) patch.progress = 100
+    updateJob(id, patch)
     pruneJobs()
   }
 
@@ -204,8 +212,13 @@ BarWidget {
         var line = Model.cleanLine(raw)
         if (line === "") return
         proc.lastLine = line
+        var stage = Model.parseStageLine(line)
+        if (stage) {
+          root.updateJob(lane.jobId, { title: stage.title, message: stage.stage, progress: stage.progress })
+          return
+        }
         var title = Model.extractDownloadedTitle(line)
-        if (title !== "") root.updateJob(lane.jobId, { title: title, message: line })
+        if (title !== "") root.updateJob(lane.jobId, { title: title, message: "Klaar", progress: 100 })
         else root.updateJob(lane.jobId, { message: line })
       }
 
@@ -351,16 +364,6 @@ BarWidget {
           }
         }
 
-        Text {
-          textFormat: Text.PlainText
-          text: "Nummer, album, playlist of artiest — spotdl zoekt de audio en downloadt hem naar " + root.resolvedDir + "."
-          color: Qt.darker(root.bar.foreground, 1.5)
-          font.family: root.bar.fontFamily
-          font.pixelSize: Style.font.caption
-          wrapMode: Text.Wrap
-          width: parent.width
-        }
-
         PanelSeparator { foreground: root.bar.foreground; visible: root.jobs.length > 0 }
 
         PanelSectionHeader {
@@ -383,7 +386,7 @@ BarWidget {
           spacing: Style.spacing.sm
 
           Repeater {
-            model: root.displayedJobs
+            model: root.jobs
 
             Row {
               id: jobRow
@@ -432,6 +435,25 @@ BarWidget {
                   elide: Text.ElideRight
                   width: parent.width
                 }
+
+                Rectangle {
+                  visible: jobRow.modelData.status !== "queued"
+                  width: parent.width
+                  height: Style.space(4)
+                  radius: height / 2
+                  color: Qt.darker(root.bar.foreground, 2.2)
+
+                  Rectangle {
+                    height: parent.height
+                    radius: parent.radius
+                    color: jobRow.modelData.status === "error" ? root.bar.urgent : Color.accent
+                    width: parent.width * (Math.max(0, Math.min(100, jobRow.modelData.progress || 0)) / 100)
+
+                    Behavior on width {
+                      NumberAnimation { duration: 220; easing.type: Easing.OutCubic }
+                    }
+                  }
+                }
               }
 
               Button {
@@ -444,15 +466,6 @@ BarWidget {
               }
             }
           }
-        }
-
-        Text {
-          textFormat: Text.PlainText
-          visible: root.jobs.length > root.displayedJobs.length
-          text: "+" + (root.jobs.length - root.displayedJobs.length) + " meer in de lijst"
-          color: Qt.darker(root.bar.foreground, 1.6)
-          font.family: root.bar.fontFamily
-          font.pixelSize: Style.font.caption
         }
 
         PanelSeparator { foreground: root.bar.foreground }

@@ -31,9 +31,38 @@ function buildCommand(opts) {
     " && spotdl download " + shq(url) +
     " --format " + shq(format) +
     " --output " + shq(outputTemplate) +
-    " --overwrite skip"
+    " --overwrite skip" +
+    " --simple-tui"
 
   return ["bash", "-lc", cmd]
+}
+
+// spotdl's own internal progress checkpoints per stage (spotdl/download/
+// progress_handler.py), replicated here since --simple-tui prints the stage
+// name but never the underlying percentage.
+var STAGE_PROGRESS = {
+  "Searching for song": 25,
+  "Getting audio meta": 40,
+  "Downloading": 55,
+  "Converting": 80,
+  "Embedding metadata": 95,
+  "Done": 100,
+  "Skipped": 100,
+  "Error": 100
+}
+
+// Parses a --simple-tui line of the form "<title>: <stage>". Splitting on
+// the last ": " keeps this correct even if a song title itself contains
+// ": ", since none of the known stage names do.
+function parseStageLine(line) {
+  var text = String(line || "")
+  var idx = text.lastIndexOf(": ")
+  if (idx < 0) return null
+  var stage = text.slice(idx + 2).trim()
+  if (!Object.prototype.hasOwnProperty.call(STAGE_PROGRESS, stage)) return null
+  var title = text.slice(0, idx).trim()
+  if (title === "") return null
+  return { title: title, stage: stage, progress: STAGE_PROGRESS[stage] }
 }
 
 // Strips carriage-return progress-bar redraws and ANSI escape sequences from
