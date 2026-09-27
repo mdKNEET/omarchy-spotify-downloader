@@ -17,24 +17,35 @@ function expandHome(path, home) {
   return p
 }
 
-// Builds the argv for one spotdl download run. Runs inside the resolved
-// download directory so the --output template can stay relative, keeping
-// the directory's own quoting isolated from the filename template's braces.
+// Maps a gvfs FUSE path such as
+// /run/user/1000/gvfs/smb-share:server=10.0.0.118,share=plex/Muziek to the
+// matching smb:// URI. smb:// URIs pass through unchanged and every other
+// path is returned as "" (a plain local folder). The FUSE path is never
+// written to directly: without gvfsd-fuse it is just tmpfs, so files saved
+// there look fine locally but never reach the server.
+function smbUri(path) {
+  var p = String(path || "").trim()
+  if (/^smb:\/\//i.test(p)) return p.replace(/\/+$/, "")
+  var m = p.match(/^\/run\/user\/\d+\/gvfs\/smb-share:([^/]+)(\/.*)?$/)
+  if (!m) return ""
+  var server = "", share = ""
+  var parts = m[1].split(",")
+  for (var i = 0; i < parts.length; i++) {
+    var kv = parts[i].split("=")
+    if (kv[0] === "server") server = decodeURIComponent(kv[1] || "")
+    else if (kv[0] === "share") share = decodeURIComponent(kv[1] || "")
+  }
+  if (server === "" || share === "") return ""
+  var rest = (m[2] || "").replace(/\/+$/, "")
+  return "smb://" + server + "/" + share + rest
+}
+
+// Builds the argv for one download run. spotdl-job.sh owns the actual work
+// (local folder vs. SMB share); this only resolves the destination.
 function buildCommand(opts) {
   var dir = String(opts.dir || "")
-  var url = String(opts.url || "")
-  var format = String(opts.format || "mp3")
-  var outputTemplate = "{artists} - {title}.{output-ext}"
-
-  var cmd = "mkdir -p " + shq(dir) +
-    " && cd " + shq(dir) +
-    " && spotdl download " + shq(url) +
-    " --format " + shq(format) +
-    " --output " + shq(outputTemplate) +
-    " --overwrite skip" +
-    " --simple-tui"
-
-  return ["bash", "-lc", cmd]
+  var dest = smbUri(dir) || dir
+  return ["bash", String(opts.script || ""), dest, String(opts.url || ""), String(opts.format || "mp3")]
 }
 
 // spotdl's own internal progress checkpoints per stage (spotdl/download/
@@ -93,8 +104,11 @@ function shortLabel(url) {
   return s.length > 60 ? s.slice(0, 57) + "…" : s
 }
 
-// file:// URI for Qt.openUrlExternally, percent-encoding each path segment.
+// URI for Qt.openUrlExternally: SMB destinations open as smb://, local ones
+// as file:// with each path segment percent-encoded.
 function fileUri(path) {
+  var smb = smbUri(path)
+  if (smb !== "") return smb
   var parts = String(path || "").split("/")
   for (var i = 0; i < parts.length; i++) parts[i] = encodeURIComponent(parts[i])
   return "file://" + parts.join("/")

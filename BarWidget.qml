@@ -8,7 +8,7 @@ import "Model.js" as Model
 // Spotify Downloader: paste a link, queue it, watch it download via spotDL.
 // Up to `maxConcurrent` lanes run spotdl in parallel (see the Repeater near
 // the bottom); each lane owns one Process and claims the next queued job
-// once free. root.jobs is the single source of truth for the popup's list —
+// once free. root.jobs is the single source of truth for the popup's list;
 // every mutation reassigns the whole array (the established pattern in this
 // codebase, e.g. the Dropbox plugin's `files` list) so the Repeater re-renders.
 BarWidget {
@@ -24,6 +24,7 @@ BarWidget {
     return Math.max(1, Math.min(6, n))
   }
   readonly property string audioFormat: root.setting("audioFormat", "mp3")
+  readonly property string jobScript: String(Qt.resolvedUrl("spotdl-job.sh")).replace(/^file:\/\//, "")
 
   readonly property var concurrencyOptions: ["1", "2", "3", "4", "5", "6"]
   readonly property var formatOptions: ["mp3", "flac", "opus", "m4a", "wav", "ogg"]
@@ -133,7 +134,9 @@ BarWidget {
   function finishJob(id, success, lastLine) {
     var patch = {
       status: success ? "done" : "error",
-      message: success ? "Klaar" : (lastLine || "Download mislukt")
+      message: success
+        ? (/^Opgeslagen op server/.test(lastLine || "") ? lastLine : "Klaar")
+        : (lastLine || "Download mislukt")
     }
     if (success) patch.progress = 100
     updateJob(id, patch)
@@ -191,7 +194,7 @@ BarWidget {
         lane.cancelled = false
         root.updateJob(job.id, { status: "downloading", message: "Starten…" })
         proc.lastLine = ""
-        proc.command = Model.buildCommand({ url: job.url, dir: root.resolvedDir, format: root.audioFormat })
+        proc.command = Model.buildCommand({ script: root.jobScript, url: job.url, dir: root.resolvedDir, format: root.audioFormat })
         proc.running = true
       }
 
@@ -209,6 +212,10 @@ BarWidget {
         var stage = Model.parseStageLine(line)
         if (stage) {
           root.updateJob(lane.jobId, { title: stage.title, message: stage.stage, progress: stage.progress })
+          return
+        }
+        if (/^Kopiëren naar server/.test(line)) {
+          root.updateJob(lane.jobId, { message: line, progress: 98 })
           return
         }
         var title = Model.extractDownloadedTitle(line)
@@ -241,7 +248,7 @@ BarWidget {
     slotSize: Style.bar.statusSlot
     fontSize: Style.font.caption
     tooltipText: root.downloadingCount > 0
-      ? ("Spotify Downloader — " + root.downloadingCount + " bezig, " + root.queuedCount + " in wachtrij")
+      ? ("Spotify Downloader: " + root.downloadingCount + " bezig, " + root.queuedCount + " in wachtrij")
       : "Spotify Downloader"
 
     onPressed: function(b) {
@@ -253,7 +260,7 @@ BarWidget {
   // KeyboardPanel (not PopupCard): PopupCard's xdg-popup window relies on
   // HyprlandFocusGrab for click/dismiss routing only and never actually
   // takes Wayland keyboard focus, so a TextField inside one shows a caret
-  // but never receives real key events — Ctrl+V silently went nowhere.
+  // but never receives real key events, so Ctrl+V silently went nowhere.
   // KeyboardPanel is Omarchy's own answer to that (see its header comment;
   // the network panel's wifi-password field relies on the same component
   // for exactly this reason): a PanelWindow that primes
