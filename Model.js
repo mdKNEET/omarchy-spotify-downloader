@@ -28,16 +28,17 @@ function smbUri(path) {
   if (/^smb:\/\//i.test(p)) return p.replace(/\/+$/, "")
   var m = p.match(/^\/run\/user\/\d+\/gvfs\/smb-share:([^/]+)(\/.*)?$/)
   if (!m) return ""
-  var server = "", share = ""
+  var server = "", share = "", user = ""
   var parts = m[1].split(",")
   for (var i = 0; i < parts.length; i++) {
     var kv = parts[i].split("=")
     if (kv[0] === "server") server = decodeURIComponent(kv[1] || "")
     else if (kv[0] === "share") share = decodeURIComponent(kv[1] || "")
+    else if (kv[0] === "user") user = decodeURIComponent(kv[1] || "")
   }
   if (server === "" || share === "") return ""
   var rest = (m[2] || "").replace(/\/+$/, "")
-  return "smb://" + server + "/" + share + rest
+  return "smb://" + (user !== "" ? user + "@" : "") + server + "/" + share + rest
 }
 
 // Builds the argv for one download run. spotdl-job.sh owns the actual work

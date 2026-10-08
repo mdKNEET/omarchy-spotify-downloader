@@ -9,6 +9,10 @@
 # only land in RAM. Instead spotdl downloads into a private staging directory
 # and the finished files are copied to the share with gio, which talks to
 # gvfsd-smb directly.
+#
+# Every network step retries with a growing pause (see `retry`), so a NAS
+# that is waking up, a dropped mount or a brief wifi hiccup no longer fails
+# the job outright.
 set -u
 
 dest=$1
@@ -16,13 +20,34 @@ url=$2
 format=$3
 template='{artists} - {title}.{output-ext}'
 
+attempts=${SPOTDL_JOB_ATTEMPTS:-4}
+
 download() {
   spotdl download "$url" \
     --format "$format" \
     --output "$template" \
     --overwrite skip \
+    --max-retries 3 \
     --simple-tui
 }
+
+# retry <label> <command...>: runs the command up to $attempts times, waiting
+# 2, 4, 8... seconds in between, and calls `reconnect` before each new try.
+retry() {
+  local label=$1 try=1 pause=2
+  shift
+  while :; do
+    "$@" && return 0
+    [ "$try" -ge "$attempts" ] && return 1
+    echo "$label mislukt, nieuwe poging $((try + 1))/$attempts over ${pause}s"
+    sleep "$pause"
+    reconnect
+    try=$((try + 1))
+    pause=$((pause * 2))
+  done
+}
+
+reconnect() { :; }
 
 case $dest in
   smb://*) ;;
@@ -34,20 +59,63 @@ case $dest in
 esac
 
 dest=${dest%/}
+# smb://[user@]host/share and the folder path below it.
 share=$(printf '%s' "$dest" | sed -E 's#^(smb://[^/]+/[^/]+).*#\1#')
+sub=${dest#"$share"}
+host=$(printf '%s' "$share" | sed -E 's#^smb://([^@/]*@)?([^/:]+).*#\2#')
+sharename=${share##*/}
 
-if ! gio info "$share" >/dev/null 2>&1; then
-  echo "Share koppelen: $share"
-  if ! gio mount "$share" </dev/null >/dev/null 2>&1; then
-    echo "Kan $share niet koppelen (open de share eens in je bestandsbeheerder en bewaar het wachtwoord)"
-    exit 1
+# gio treats smb://host/share and smb://user@host/share as different
+# locations, so a share the file manager mounted as desire@... reads as "not
+# mounted" when asked for without the user. Reuse whatever mount already
+# exists for this host and share, whichever user it was made with.
+mounted_share() {
+  gio mount -l 2>/dev/null \
+    | sed -nE 's#^Mount\([0-9]+\): .* -> (smb://([^@/]*@)?([^/]+)/([^/]+))/?$#\1 \3 \4#p' \
+    | while read -r uri h s; do
+        if [ "${h,,}" = "${host,,}" ] && [ "${s,,}" = "${sharename,,}" ]; then
+          echo "$uri"
+          break
+        fi
+      done
+}
+
+server_reachable() {
+  timeout 3 bash -c "exec 3<>/dev/tcp/$host/445" 2>/dev/null
+}
+
+connect() {
+  local found
+  if ! server_reachable; then
+    echo "NAS $host niet bereikbaar"
+    return 1
   fi
-fi
+  found=$(mounted_share)
+  if [ -n "$found" ]; then
+    share=$found
+  else
+    echo "Share koppelen: $share"
+    if ! gio mount "$share" </dev/null >/dev/null 2>&1; then
+      # The password is usually saved in the keyring under the login name.
+      case $share in
+        smb://*@*) return 1 ;;
+      esac
+      local withuser="smb://$USER@${share#smb://}"
+      gio mount "$withuser" </dev/null >/dev/null 2>&1 || return 1
+      share=$withuser
+    fi
+  fi
+  dest=$share$sub
+  gio info "$dest" >/dev/null 2>&1 || gio mkdir -p "$dest" 2>/dev/null
+}
 
-if ! gio info "$dest" >/dev/null 2>&1 && ! gio mkdir -p "$dest" 2>/dev/null; then
-  echo "Kan servermap niet aanmaken: $dest"
+if ! retry "Verbinden met NAS" connect; then
+  echo "Kan $share niet koppelen (open de share eens in je bestandsbeheerder en bewaar het wachtwoord)"
   exit 1
 fi
+
+# From here on a failed copy re-checks the connection before trying again.
+reconnect() { connect >/dev/null 2>&1; }
 
 cache=${XDG_CACHE_HOME:-$HOME/.cache}/spotify-downloader
 mkdir -p "$cache" || exit 1
@@ -63,6 +131,8 @@ copied=0
 skipped=0
 failed=0
 
+copy_file() { gio copy -- "$1" "$dest/" 2>/dev/null; }
+
 while IFS= read -r -d '' file; do
   name=${file##*/}
   if printf '%s\n' "$existing" | grep -Fxq -- "$name"; then
@@ -70,7 +140,7 @@ while IFS= read -r -d '' file; do
     continue
   fi
   echo "Kopiëren naar server: $name"
-  if gio copy -- "$file" "$dest/" 2>/dev/null; then
+  if retry "Kopiëren" copy_file "$file"; then
     copied=$((copied + 1))
   else
     echo "Kopiëren mislukt: $name"

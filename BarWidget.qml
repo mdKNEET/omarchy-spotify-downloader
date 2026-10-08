@@ -131,6 +131,11 @@ BarWidget {
     }
   }
 
+  function retryJob(id) {
+    updateJob(id, { status: "queued", message: "In wachtrij", progress: 0 })
+    pump()
+  }
+
   function finishJob(id, success, lastLine) {
     var patch = {
       status: success ? "done" : "error",
@@ -423,6 +428,7 @@ BarWidget {
 
               Column {
                 width: parent.width - Style.space(16) - removeButton.implicitWidth - Style.spacing.controlGap * 2
+                  - (retryButton.visible ? retryButton.implicitWidth + Style.spacing.controlGap : 0)
                 spacing: Style.spacing.xxs
                 anchors.verticalCenter: parent.verticalCenter
 
@@ -464,6 +470,15 @@ BarWidget {
                     }
                   }
                 }
+              }
+
+              Button {
+                id: retryButton
+                visible: jobRow.modelData.status === "error"
+                iconText: "󰑐"
+                tooltipText: "Opnieuw proberen"
+                foreground: Qt.darker(root.bar.foreground, 1.3)
+                onClicked: root.retryJob(jobRow.modelData.id)
               }
 
               Button {
