@@ -5,8 +5,9 @@ import qs.Commons
 import qs.Ui
 import "Model.js" as Model
 
-// Spotify Downloader: paste a link, queue it, watch it download via spotDL.
-// Up to `maxConcurrent` lanes run spotdl in parallel (see the Repeater near
+// Spotify & YouTube Downloader: paste a link, queue it, watch it download via
+// spotDL (Spotify) or yt-dlp (YouTube).
+// Up to `maxConcurrent` lanes run a download in parallel (see the Repeater near
 // the bottom); each lane owns one Process and claims the next queued job
 // once free. root.jobs is the single source of truth for the popup's list;
 // every mutation reassigns the whole array (the established pattern in this
@@ -24,10 +25,12 @@ BarWidget {
     return Math.max(1, Math.min(6, n))
   }
   readonly property string audioFormat: root.setting("audioFormat", "mp3")
-  readonly property string jobScript: String(Qt.resolvedUrl("spotdl-job.sh")).replace(/^file:\/\//, "")
+  readonly property string youtubeMode: root.setting("youtubeMode", "audio")
+  readonly property string jobScript: String(Qt.resolvedUrl("download-job.sh")).replace(/^file:\/\//, "")
 
   readonly property var concurrencyOptions: ["1", "2", "3", "4", "5", "6"]
   readonly property var formatOptions: ["mp3", "flac", "opus", "m4a", "wav", "ogg"]
+  readonly property var youtubeModeOptions: ["audio", "video"]
 
   property var jobs: []
   property int _nextId: 1
@@ -193,13 +196,15 @@ BarWidget {
       required property int index
       property int jobId: -1
       property bool cancelled: false
+      property bool youtube: false
 
       function beginJob(job) {
         lane.jobId = job.id
         lane.cancelled = false
+        lane.youtube = Model.isYoutube(job.url)
         root.updateJob(job.id, { status: "downloading", message: "Starten…" })
         proc.lastLine = ""
-        proc.command = Model.buildCommand({ script: root.jobScript, url: job.url, dir: root.resolvedDir, format: root.audioFormat })
+        proc.command = Model.buildCommand({ script: root.jobScript, url: job.url, dir: root.resolvedDir, format: root.audioFormat, youtubeMode: root.youtubeMode })
         proc.running = true
       }
 
@@ -214,6 +219,11 @@ BarWidget {
         var line = Model.cleanLine(raw)
         if (line === "") return
         proc.lastLine = line
+        var youtubeUpdate = lane.youtube ? Model.parseYoutubeLine(line) : null
+        if (youtubeUpdate) {
+          root.updateJob(lane.jobId, youtubeUpdate)
+          return
+        }
         var stage = Model.parseStageLine(line)
         if (stage) {
           root.updateJob(lane.jobId, { title: stage.title, message: stage.stage, progress: stage.progress })
@@ -253,8 +263,8 @@ BarWidget {
     slotSize: Style.bar.statusSlot
     fontSize: Style.font.caption
     tooltipText: root.downloadingCount > 0
-      ? ("Spotify Downloader: " + root.downloadingCount + " bezig, " + root.queuedCount + " in wachtrij")
-      : "Spotify Downloader"
+      ? ("Spotify & YouTube Downloader: " + root.downloadingCount + " bezig, " + root.queuedCount + " in wachtrij")
+      : "Spotify & YouTube Downloader"
 
     onPressed: function(b) {
       root.settingsOpen = false
@@ -291,7 +301,7 @@ BarWidget {
 
         Text {
           textFormat: Text.PlainText
-          text: "Spotify Downloader"
+          text: "Spotify & YouTube Downloader"
           color: root.bar.foreground
           font.family: root.bar.fontFamily
           font.pixelSize: Style.font.subtitle
@@ -360,7 +370,7 @@ BarWidget {
           TextField {
             id: urlField
             width: parent.width - downloadButton.implicitWidth - Style.spacing.controlGap
-            placeholderText: "Plak een Spotify-link…"
+            placeholderText: "Plak een Spotify- of YouTube-link…"
             onAccepted: {
               root.addUrl(urlField.text)
               urlField.text = ""
@@ -580,6 +590,14 @@ BarWidget {
           value: root.audioFormat
           options: root.formatOptions
           onChanged: function(v) { root.saveSetting("audioFormat", v) }
+        }
+
+        Dropdown {
+          width: parent.width
+          label: "YouTube opslaan als"
+          value: root.youtubeMode
+          options: root.youtubeModeOptions
+          onChanged: function(v) { root.saveSetting("youtubeMode", v) }
         }
 
         Row {

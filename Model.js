@@ -1,4 +1,4 @@
-// Pure helpers for the Spotify Downloader widget: shell quoting, command
+// Pure helpers for the Spotify & YouTube Downloader widget: shell quoting, command
 // building, and output-line cleanup. Kept free of QML types so they stay
 // trivially testable and reusable from the lane delegate and the root item.
 
@@ -41,12 +41,22 @@ function smbUri(path) {
   return "smb://" + (user !== "" ? user + "@" : "") + server + "/" + share + rest
 }
 
-// Builds the argv for one download run. spotdl-job.sh owns the actual work
-// (local folder vs. SMB share); this only resolves the destination.
+// True for youtube.com (www, m, music, ...), youtube-nocookie.com and youtu.be
+// links, with or without a scheme. Search queries are not links, so they keep
+// going to spotdl.
+function isYoutube(url) {
+  return /^(https?:\/\/)?([a-z0-9-]+\.)*(youtube\.com|youtube-nocookie\.com|youtu\.be)(\/|$)/i.test(String(url || "").trim())
+}
+
+// Builds the argv for one download run. download-job.sh owns the actual work
+// (tool choice flags, local folder vs. SMB share); this only resolves the
+// destination and the source.
 function buildCommand(opts) {
   var dir = String(opts.dir || "")
   var dest = smbUri(dir) || dir
-  return ["bash", String(opts.script || ""), dest, String(opts.url || ""), String(opts.format || "mp3")]
+  var url = String(opts.url || "")
+  var source = isYoutube(url) ? (opts.youtubeMode === "video" ? "youtube-video" : "youtube-audio") : "spotify"
+  return ["bash", String(opts.script || ""), dest, url, String(opts.format || "mp3"), source]
 }
 
 // spotdl's own internal progress checkpoints per stage (spotdl/download/
@@ -77,6 +87,22 @@ function parseStageLine(line) {
   return { title: title, stage: stage, progress: STAGE_PROGRESS[stage] }
 }
 
+// Parses the marker lines download-job.sh makes yt-dlp print. The bar stops at
+// 85 during the download so the (for long sets, slow) conversion still shows
+// up as progress. Video jobs download two streams, so their bar runs twice.
+function parseYoutubeLine(line) {
+  var text = String(line || "")
+  var m = text.match(/^Titel: (.+)$/)
+  if (m) return { title: m[1] }
+  m = text.match(/^Downloaden\s+([\d.]+)%/)
+  if (m) {
+    var percent = Math.max(0, Math.min(100, parseFloat(m[1])))
+    return { message: "Downloaden " + Math.round(percent) + "%", progress: Math.round(percent * 0.85) }
+  }
+  if (text === "Converteren") return { message: "Converteren", progress: 90 }
+  return null
+}
+
 // Strips carriage-return progress-bar redraws and ANSI escape sequences from
 // one line of spotdl/yt-dlp output, keeping only the last meaningful segment.
 function cleanLine(raw) {
@@ -94,7 +120,7 @@ function extractDownloadedTitle(line) {
   return m ? m[1] : ""
 }
 
-// Short, stable label for a freshly queued job before spotdl reports a title.
+// Short, stable label for a freshly queued job before the tool reports a title.
 function shortLabel(url) {
   var s = String(url || "").trim()
   var m = s.match(/open\.spotify\.com\/(?:intl-[a-z]{2}\/)?(track|album|playlist|artist)\/([A-Za-z0-9]+)/)
@@ -102,6 +128,8 @@ function shortLabel(url) {
     var kind = m[1].charAt(0).toUpperCase() + m[1].slice(1)
     return kind + " " + m[2].slice(0, 8)
   }
+  var y = s.match(/(?:[?&]v=|youtu\.be\/|\/shorts\/|\/live\/)([A-Za-z0-9_-]+)/)
+  if (y && isYoutube(s)) return "YouTube " + y[1].slice(0, 8)
   return s.length > 60 ? s.slice(0, 57) + "…" : s
 }
 

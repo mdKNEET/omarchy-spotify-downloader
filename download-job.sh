@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# Runs one spotdl download for the widget.
+# Runs one download for the widget: spotdl for Spotify links and search
+# queries, yt-dlp for YouTube links.
 #
-# Usage: spotdl-job.sh <destination> <url> <format>
+# Usage: download-job.sh <destination> <url> <format> [<source>]
+#
+# <source> is spotify (default), youtube-audio or youtube-video.
 #
 # <destination> is either a local directory or an smb:// URI. SMB targets are
 # never written through the gvfs FUSE path (/run/user/$UID/gvfs/...): when
 # gvfsd-fuse is not running that path is plain tmpfs, so writes "succeed" but
-# only land in RAM. Instead spotdl downloads into a private staging directory
+# only land in RAM. Instead the download goes into a private staging directory
 # and the finished files are copied to the share with gio, which talks to
 # gvfsd-smb directly.
 #
@@ -18,17 +21,88 @@ set -u
 dest=$1
 url=$2
 format=$3
+source=${4:-spotify}
 template='{artists} - {title}.{output-ext}'
 
 attempts=${SPOTDL_JOB_ATTEMPTS:-4}
 
-download() {
-  spotdl download "$url" \
+# The widget cancels a job with SIGTERM to this script only, so each tool runs
+# in its own session and the whole group (ffmpeg included) is stopped with it.
+child=0
+run() {
+  local code
+  setsid "$@" </dev/null &
+  child=$!
+  wait "$child"
+  code=$?
+  child=0
+  return "$code"
+}
+
+stop_child() {
+  if [ "$child" -gt 0 ]; then
+    kill -TERM -- "-$child" 2>/dev/null
+    wait "$child" 2>/dev/null
+  fi
+  exit 143
+}
+trap stop_child TERM INT HUP
+
+download_spotify() {
+  run spotdl download "$url" \
     --format "$format" \
     --output "$template" \
     --overwrite skip \
     --max-retries 3 \
     --simple-tui
+}
+
+# The Titel/Downloaden/Converteren lines are parsed by parseYoutubeLine in
+# Model.js. A " | " in a title becomes " - " because SMB shares reject "|".
+download_youtube() {
+  local -a args=(
+    --no-playlist
+    --windows-filenames
+    --embed-metadata
+    --replace-in-metadata title ' *\| *' ' - '
+    --output '%(artist&{} - |)s%(track,title)s.%(ext)s'
+    --newline
+    --progress
+    --progress-template 'download:Downloaden %(progress._percent_str)s'
+    --print 'before_dl:Titel: %(title)s'
+    --print 'post_process:%(id&Converteren|)s'
+  )
+
+  if [ "$source" = youtube-video ]; then
+    args+=(-f 'bv*+ba/b' -S 'res:1080,vcodec:h264,acodec:m4a' --merge-output-format mp4)
+  else
+    local codec=$format
+    [ "$format" = ogg ] && codec=vorbis
+    args+=(-x --audio-format "$codec" --audio-quality 0)
+    # Cover art in the other containers needs python-mutagen and fails the job.
+    [ "$format" = mp3 ] && args+=(--embed-thumbnail)
+  fi
+
+  run yt-dlp "${args[@]}" -- "$url"
+}
+
+keep_ext=
+case $source in
+  youtube-audio) keep_ext=$format ;;
+  youtube-video) keep_ext=mp4 ;;
+esac
+
+if [ -n "$keep_ext" ] && ! command -v yt-dlp >/dev/null 2>&1; then
+  echo "yt-dlp niet gevonden (installeer met: omarchy pkg add yt-dlp)"
+  exit 127
+fi
+
+download() {
+  if [ -n "$keep_ext" ]; then
+    download_youtube
+  else
+    download_spotify
+  fi
 }
 
 # retry <label> <command...>: runs the command up to $attempts times, waiting
@@ -49,12 +123,44 @@ retry() {
 
 reconnect() { :; }
 
+make_stage() {
+  local cache=${XDG_CACHE_HOME:-$HOME/.cache}/spotify-downloader
+  mkdir -p "$cache" || exit 1
+  stage=$(mktemp -d "$cache/job.XXXXXX") || exit 1
+  trap 'rm -rf "$stage"' EXIT
+  cd "$stage" || exit 1
+}
+
+# yt-dlp leaves part files, thumbnails and separate streams behind after a
+# failed or cancelled run, and ffmpeg writes straight to the final name; only
+# finished output may leave the staging directory.
+stage_filter=(-type f ! -name '.*' ! -name '*.part' ! -name '*.ytdl' ! -name '*.temp.*' ! -name '*.f[0-9]*.*')
+[ -n "$keep_ext" ] && stage_filter+=(-name "*.$keep_ext")
+
 case $dest in
   smb://*) ;;
   *)
     mkdir -p "$dest" && cd "$dest" || { echo "Kan map niet openen: $dest"; exit 1; }
+    dest=$PWD
+    if [ -z "$keep_ext" ]; then
+      download
+      exit $?
+    fi
+
+    make_stage
     download
-    exit $?
+    status=$?
+    saved=0
+    while IFS= read -r -d '' file; do
+      if [ -e "$dest/${file##*/}" ] || mv -- "$file" "$dest/"; then
+        saved=$((saved + 1))
+      fi
+    done < <(find "$stage" "${stage_filter[@]}" -print0)
+    if [ "$status" -eq 0 ] && [ "$saved" -eq 0 ]; then
+      echo "Geen bestanden gedownload"
+      exit 1
+    fi
+    exit "$status"
     ;;
 esac
 
@@ -117,12 +223,7 @@ fi
 # From here on a failed copy re-checks the connection before trying again.
 reconnect() { connect >/dev/null 2>&1; }
 
-cache=${XDG_CACHE_HOME:-$HOME/.cache}/spotify-downloader
-mkdir -p "$cache" || exit 1
-stage=$(mktemp -d "$cache/job.XXXXXX") || exit 1
-trap 'rm -rf "$stage"' EXIT
-
-cd "$stage" || exit 1
+make_stage
 download
 status=$?
 
@@ -146,7 +247,7 @@ while IFS= read -r -d '' file; do
     echo "Kopiëren mislukt: $name"
     failed=$((failed + 1))
   fi
-done < <(find "$stage" -type f ! -name '.*' -print0)
+done < <(find "$stage" "${stage_filter[@]}" -print0)
 
 if [ "$failed" -gt 0 ]; then
   echo "Opslaan op server mislukt voor $failed bestand(en)"

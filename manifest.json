@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "id": "io.github.mdkneet.spotify-downloader",
-  "name": "Spotify Downloader",
-  "version": "1.1.0",
+  "name": "Spotify & YouTube Downloader",
+  "version": "1.2.0",
   "author": "mdKNEET",
   "license": "MIT",
-  "description": "Paste a Spotify link into the Omarchy bar and download it as a local audio file via spotDL, with a queue for multiple simultaneous downloads.",
+  "description": "Paste a Spotify or YouTube link into the Omarchy bar and download it as a local file via spotDL or yt-dlp, with a queue for multiple simultaneous downloads.",
   "kinds": [
     "bar-widget"
   ],
@@ -13,15 +13,16 @@
     "barWidget": "BarWidget.qml"
   },
   "barWidget": {
-    "displayName": "Spotify Downloader",
-    "description": "Download Spotify tracks, albums, and playlists with spotDL. Queue several downloads at once and pick the destination folder.",
+    "displayName": "Spotify & YouTube Downloader",
+    "description": "Download Spotify tracks, albums, and playlists with spotDL and YouTube videos and playlists with yt-dlp. Queue several downloads at once and pick the destination folder.",
     "category": "Media",
     "allowMultiple": false,
     "defaultSection": "right",
     "defaults": {
       "downloadDir": "~/Music/Spotify",
       "maxConcurrent": 3,
-      "audioFormat": "mp3"
+      "audioFormat": "mp3",
+      "youtubeMode": "audio"
     },
     "schema": [
       {
@@ -53,6 +54,17 @@
           "ogg"
         ],
         "defaultValue": "mp3"
+      },
+      {
+        "key": "youtubeMode",
+        "type": "enum",
+        "label": "Save YouTube links as",
+        "options": [
+          "audio",
+          "video"
+        ],
+        "defaultValue": "audio",
+        "description": "audio uses the audio format above; video saves an mp4 of at most 1080p."
       }
     ]
   }
